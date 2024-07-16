@@ -10,6 +10,7 @@ import org.telegram.telegrambots.meta.api.objects.Update;
 import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
 import ru.telegram.telegram_bot.config.BotConfig;
 import ru.telegram.telegram_bot.model.CurrencyModel;
+import ru.telegram.telegram_bot.model.ReceivedEntity;
 import ru.telegram.telegram_bot.model.UserState;
 import ru.telegram.telegram_bot.service.CurrencyService;
 import ru.telegram.telegram_bot.service.components.Buttons;
@@ -41,75 +42,79 @@ public class TelegramBot extends TelegramLongPollingBot {
     }
 
     public void onUpdateReceived(@NotNull Update update) {
-        long chatId = 0;
-        long userId = 0; //это нам понадобится позже
-        String userName = null;
-        String receivedMessage;
 
         //если получено сообщение текстом
         if (update.hasMessage()) {
-            chatId = update.getMessage().getChatId();
-            userId = update.getMessage().getFrom().getId();
-            userName = update.getMessage().getFrom().getFirstName();
+            var receivedEntity = ReceivedEntity.builder()
+                    .chatId(update.getMessage().getChatId())
+                    .userId(update.getMessage().getFrom().getId())
+                    .userName(update.getMessage().getFrom().getFirstName())
+                    .build();
 
             if (update.getMessage().hasText()) {
-                receivedMessage = update.getMessage().getText();
-                botAnswerUtils(receivedMessage, userId, chatId, userName);
+                receivedEntity.setReceivedMessage(update.getMessage().getText());
+                botAnswerUtils(receivedEntity);
             }
 
             //если нажата одна из кнопок бота
         } else if (update.hasCallbackQuery()) {
-            chatId = update.getCallbackQuery().getMessage().getChatId();
-            userId = update.getCallbackQuery().getFrom().getId();
-            userName = update.getCallbackQuery().getFrom().getFirstName();
-            String callbackData = update.getCallbackQuery().getData();
+            var receivedEntity = ReceivedEntity.builder()
+                    .chatId(update.getCallbackQuery().getMessage().getChatId())
+                    .userId(update.getCallbackQuery().getFrom().getId())
+                    .userName(update.getCallbackQuery().getFrom().getFirstName())
+                    .receivedMessage(update.getCallbackQuery().getData())
+                    .build();
 
-            switch (callbackData) {
+            switch (receivedEntity.getReceivedMessage()) {
                 case "/rate":
-                    UserState userState = userStates.computeIfAbsent(userId, k -> new UserState());
+                    UserState userState = userStates.computeIfAbsent(receivedEntity.getUserId(), k -> new UserState());
                     userState.setCurrentState("AWAITING_FEEDBACK");
-                    SendMessage message = new SendMessage();
-                    message.setChatId(chatId);
-                    message.setText("Enter the required currency in the format: USD");
+
+                    var message = SendMessage.builder()
+                            .chatId(receivedEntity.getChatId())
+                            .text("Enter the required currency in the format: USD")
+                            .replyMarkup(Buttons.inlineMarkup())
+                            .build();
 
                     try {
                         execute(message);
-                        log.info(userName + " Reply sent");
+                        log.info(receivedEntity.getUserId() + " Reply sent");
                     } catch (TelegramApiException e) {
                         log.error(e.getMessage());
                     }
                     break;
                 default:
-                    botAnswerUtils(callbackData, userId, chatId, userName);
                     break;
             }
         }
 
     }
 
-    private void botAnswerUtils(String receivedMessage, long userId, long chatId, String userName) {
-        switch (receivedMessage) {
+    private void botAnswerUtils(ReceivedEntity receivedEntity) {
+        switch (receivedEntity.getReceivedMessage()) {
             case "/start":
-                startBot(chatId, userName);
+                startBot(receivedEntity.getChatId(), receivedEntity.getUserName());
                 break;
             case "/help":
-                sendHelpText(chatId, HELP_TEXT);
+                sendHelpText(receivedEntity.getChatId(), HELP_TEXT);
                 break;
             case "/rate":
-                UserState userState = userStates.computeIfAbsent(userId, k -> new UserState());
+                UserState userState = userStates.computeIfAbsent(receivedEntity.getUserId(), k -> new UserState());
                 userState.setCurrentState("AWAITING_FEEDBACK");
-                SendMessage message = new SendMessage();
-                message.setChatId(chatId);
-                message.setText("Enter the required currency in the format: USD");
 
+                var message = SendMessage.builder()
+                        .chatId(receivedEntity.getChatId())
+                        .text("Enter the required currency in the format: USD")
+                        .replyMarkup(Buttons.inlineMarkup())
+                        .build();
                 try {
                     execute(message);
-                    log.info(userName + " Reply sent");
+                    log.info(receivedEntity.getUserId() + " Reply sent");
                 } catch (TelegramApiException e) {
                     log.error(e.getMessage());
                 }
             default:
-                sendAnswerText(userId, chatId, receivedMessage);
+                sendAnswerText(receivedEntity);
                 break;
         }
     }
@@ -131,27 +136,27 @@ public class TelegramBot extends TelegramLongPollingBot {
         }
     }
 
-    private void sendAnswerText(long userId, long chatId, String receivedMessage) {
+    private void sendAnswerText(ReceivedEntity receivedEntity) {
         CurrencyModel currencyModel = new CurrencyModel();
         String currency = "";
         SendMessage message = new SendMessage();
-        message.setChatId(chatId);
-        UserState userState = userStates.get(userId);
+        message.setChatId(receivedEntity.getChatId());
+        UserState userState = userStates.get(receivedEntity.getUserId());
 
         try {
             if (userState != null) {
-                message.setText(CurrencyService.getCurrencyRate(receivedMessage.toUpperCase(), currencyModel));
-                userStates.remove(userId);
+                message.setText(CurrencyService.getCurrencyRate(receivedEntity.getReceivedMessage().toUpperCase(), currencyModel));
+                userStates.remove(receivedEntity.getUserId());
 
                 try {
                     execute(message);
-                    log.info(userId + " Reply sent");
+                    log.info(receivedEntity.getUserId() + " Reply sent");
                 } catch (TelegramApiException e) {
                     log.error(e.getMessage());
                 }
 
             } else {
-                sendHelpText(chatId, HELP_TEXT);
+                sendHelpText(receivedEntity.getChatId(), HELP_TEXT);
             }
 
         } catch (IOException e) {
